@@ -1,305 +1,221 @@
-# Kubernetes Policy Enforcement Demo with Kyverno
+# Kubernetes Policy Enforcement with Kyverno
 
-## Overview
-
-This repository demonstrates how to implement and enforce Kubernetes security and best practices using **Kyverno**.
-
-The goal of this project is to show how a **Kubernetes policy engine** can automatically validate and control workloads running in a cluster.
-
-In this demo we:
-
-* Deploy **Kyverno** as a Kubernetes policy engine
-* Define security and best-practice policies
-* Apply them to the cluster
-* Demonstrate how non-compliant workloads are automatically rejected
-
-This project can be used as a **simple presentation / proof-of-concept** showing how policy enforcement works in Kubernetes environments.
+> Course project demonstrating automated policy enforcement in Kubernetes using Kyverno.
 
 ---
 
-# Architecture
+## Table of Contents
+
+1. [Introduction](#introduction)
+2. [Methods](#methods)
+3. [Results](#results)
+4. [Discussion](#discussion)
+5. [Quick Start](#quick-start)
+
+---
+
+## Introduction
+
+### Background
+
+Modern cloud-native applications run on Kubernetes clusters shared by multiple teams. Without guardrails, developers can accidentally deploy workloads that are insecure, resource-hungry, or poorly labelled — causing outages, security incidents, and operational pain.
+
+**Kyverno** is a Kubernetes-native policy engine that enforces rules at the admission controller level. Every resource submitted to the API server is evaluated against defined policies before being accepted or rejected. No custom code is required — policies are plain YAML.
+
+### Problem Statement
+
+How can a Kubernetes cluster automatically prevent non-compliant workloads from being deployed, without requiring manual code review of every manifest?
+
+### Goals
+
+- Deploy Kyverno as an admission controller in a local Kubernetes cluster
+- Define and apply security and best-practice policies
+- Demonstrate automatic rejection of non-compliant workloads
+- Provide a reproducible proof-of-concept suitable for production adoption
+
+---
+
+## Methods
+
+### Architecture
 
 ```
 Developer → kubectl apply → Kubernetes API Server
-                               │
-                               ▼
-                         Kyverno Admission Controller
-                               │
-                ┌──────────────┴──────────────┐
-                │                             │
-        Policy Valid ✓                 Policy Violation ✗
-                │                             │
-                ▼                             ▼
-          Deployment Created          Request Rejected
+                                   │
+                                   ▼
+                         Kyverno Admission Webhook
+                                   │
+                    ┌──────────────┴──────────────┐
+                    │                             │
+            Policy Valid ✓                 Policy Violation ✗
+                    │                             │
+                    ▼                             ▼
+              Resource Created            Request Rejected
+                                     (error returned to user)
 ```
 
-Kyverno works as an **admission controller** in Kubernetes.
-Every resource created in the cluster is evaluated against defined policies.
+Kyverno registers itself as a **ValidatingAdmissionWebhook**. The API server forwards every create/update request to Kyverno before persisting it to etcd. Kyverno evaluates the resource against all matching `ClusterPolicy` rules and either allows or denies the request.
 
----
+### Tools & Technologies
 
-# Technologies Used
+| Tool | Purpose |
+|------|---------|
+| Kubernetes (Minikube) | Local cluster for testing |
+| Kyverno | Policy engine / admission controller |
+| Helm | Kyverno installation |
+| kubectl | Cluster interaction |
+| Makefile | Automation of common commands |
 
-* Kubernetes
-* Kyverno
-* kubectl
-* Helm
-* Makefile automation
-
----
-
-# Project Structure
+### Project Structure
 
 ```
-k8s-kyverno-demo
+k8s-kyverno-demo/
 │
-├── Makefile
+├── Makefile                          # Automation targets (apply / test / clean)
 │
-├── policies
-│   ├── policy-no-latest.yaml
-│   ├── policy-require-label.yaml
-│   └── policy-resources.yaml
+├── policies/
+│   ├── policy.yaml                   # Disallow latest image tag
+│   ├── policy-requires-labels.yaml   # Require app label on Pods
+│   └── policy-resources.yaml         # Require CPU and memory limits
 │
-├── test
-│   └── bad-deployment.yaml
-│
-└── README.md
+└── test/
+    └── deployment.yaml               # Non-compliant deployment (triggers rejection)
 ```
 
----
+### Policies Implemented
 
-# Policies Implemented
+#### 1. Disallow `latest` image tag (`policy.yaml`)
 
-## 1 Disallow `latest` image tag
+Using the `latest` tag makes deployments non-deterministic — a re-pull may bring a different image version. This policy **rejects any Pod** whose container image uses the `latest` tag.
 
-Using the `latest` tag is considered a bad practice because it makes deployments non-deterministic.
-
-Policy goal:
-
-* Prevent containers from running images with the `latest` tag.
-
-Example violation:
-
-```
+```yaml
+# Violation example
 image: nginx:latest
-```
 
-Example compliant image:
-
-```
+# Compliant example
 image: nginx:1.25
 ```
 
----
+#### 2. Require `app` label (`policy-requires-labels.yaml`)
 
-## 2 Require application labels
+Labels are essential for observability, monitoring, and service discovery. This policy **rejects any Pod** that does not carry an `app` label.
 
-Labels are critical for:
-
-* observability
-* monitoring
-* service discovery
-* resource grouping
-
-Policy goal:
-
-Ensure all workloads contain the `app` label.
-
-Example required metadata:
-
-```
+```yaml
+# Required metadata
 metadata:
   labels:
     app: my-service
 ```
 
----
+#### 3. Require CPU and memory limits (`policy-resources.yaml`)
 
-## 3 Require CPU and memory limits
+Containers without resource limits can consume all available node resources, starving neighbouring workloads. This policy **rejects any Pod** whose containers do not define both `cpu` and `memory` limits.
 
-In production Kubernetes clusters it is important to define resource limits to avoid resource starvation.
-
-Policy goal:
-
-All containers must define:
-
-* CPU limits
-* Memory limits
-
-Example:
-
-```
+```yaml
 resources:
   limits:
     cpu: "500m"
     memory: "256Mi"
 ```
 
+### Test Workload
+
+`test/deployment.yaml` is a deliberately non-compliant `nginx:latest` deployment used to verify that Kyverno correctly blocks policy violations.
+
 ---
 
-# Installation
+## Results
 
-## 1 Start Kubernetes cluster
+### Installation
 
-Example using **Minikube**:
+**1. Start a local Kubernetes cluster:**
 
-```
+```bash
 minikube start
-```
-
-Check cluster status:
-
-```
 kubectl get nodes
 ```
 
----
+**2. Install Kyverno via Helm:**
 
-## 2 Install Kyverno
-
-Add Helm repository:
-
-```
+```bash
 helm repo add kyverno https://kyverno.github.io/kyverno/
 helm repo update
-```
-
-Install Kyverno:
-
-```
 helm install kyverno kyverno/kyverno -n kyverno --create-namespace
-```
-
-Verify installation:
-
-```
 kubectl get pods -n kyverno
 ```
 
----
+**3. Apply all policies:**
 
-# Applying Policies
-
-All policies can be applied using the Makefile:
-
-```
+```bash
 make apply
-```
-
-This command applies all policies from the `policies` directory.
-
-Verify:
-
-```
 kubectl get clusterpolicy
 ```
 
----
+**4. Trigger a policy violation:**
 
-# Testing Policy Enforcement
-
-To test the policies, a deliberately incorrect deployment is provided.
-
-This deployment violates the **no latest tag policy**.
-
-Run:
-
-```
+```bash
 make test
 ```
 
-Expected result:
+Expected output:
 
 ```
-Error from server: admission webhook denied the request
-latest tag is not allowed
+Error from server: admission webhook "validate.kyverno.svc-fail" denied the request:
+resource Deployment/default/nginx-test was blocked due to the following policies:
+  disallow-latest-tag:
+    check-image-tag: latest tag is not allowed
 ```
 
-This demonstrates that Kyverno correctly prevents non-compliant workloads.
+**5. Clean up:**
 
----
-
-# Cleanup
-
-Remove test deployment:
-
-```
+```bash
 make clean
 ```
 
----
+### Observed Behaviour
 
-# Example Workflow
-
-Typical developer workflow with policies enabled:
-
-1. Developer creates a Kubernetes manifest
-2. Manifest is applied using `kubectl`
-3. Kyverno intercepts the request
-4. Policies are evaluated
-5. Resource is either:
-
-   * **accepted**
-   * **rejected**
+| Scenario | Outcome |
+|----------|---------|
+| Pod with `nginx:latest` | Rejected — violates `disallow-latest-tag` |
+| Pod without `app` label | Rejected — violates `require-app-label` |
+| Pod without resource limits | Rejected — violates `require-resources` |
+| Pod with `nginx:1.25`, correct labels, and limits | Accepted |
 
 ---
 
-# Why Policy Engines Are Important
+## Discussion
 
-Policy engines provide:
+### Key Findings
 
-* Security enforcement
-* Compliance controls
-* Governance automation
-* Standardized cluster configurations
+- Kyverno enforces policies **transparently** — developers receive clear error messages explaining exactly which policy was violated and why.
+- Policies are defined in **plain YAML**, requiring no custom controllers or Go code, which lowers the barrier to adoption.
+- The admission webhook approach means enforcement is **cluster-wide** and cannot be bypassed by individual users.
 
-Without policy enforcement developers could accidentally deploy insecure workloads.
+### Limitations
 
----
+- The test deployment (`nginx:latest`) violates the `disallow-latest-tag` policy. A compliant deployment is not included in this demo but can be added by specifying a pinned image tag and resource limits.
+- Policies currently target `Pod` resources only. Extending to `Deployment`, `DaemonSet`, etc. requires additional `match` entries.
+- This demo runs on Minikube; production setups require HA Kyverno installation with multiple replicas.
 
-# Key Benefits of Kyverno
+### Future Work
 
-* Kubernetes-native policy definitions
-* YAML based policies
-* Easy integration
-* Supports validation, mutation and generation rules
-
----
-
-# Conclusion
-
-This project demonstrates how **Kyverno can enforce Kubernetes best practices automatically**.
-
-By implementing policy validation at the cluster level we ensure that:
-
-* insecure deployments are prevented
-* best practices are enforced
-* cluster governance is maintained
-
-This approach is commonly used in **production Kubernetes environments** to improve security and reliability.
+- Add policies for image vulnerability scanning (Kyverno + Trivy)
+- Implement namespace isolation and network policy enforcement
+- Add **mutation rules** to automatically inject labels or set default resource limits
+- Integrate with a GitOps pipeline (ArgoCD / Flux) so policies are applied declaratively
 
 ---
 
-# Possible Extensions
+## Presentation Notes
 
-Future improvements could include:
-
-* image vulnerability policies
-* namespace isolation rules
-* network policy enforcement
-* automatic label mutation
-* GitOps integration
+- Slides: maximum 12 (follow IMRAD structure)
+- Video: 3–5 minutes demonstrating the live `make test` rejection
+- Include the architecture diagram from the [Methods](#methods) section
 
 ---
 
-# Demo Summary
+## References
 
-This repository demonstrates:
-
-✔ Installing a Kubernetes policy engine
-✔ Defining cluster security policies
-✔ Enforcing deployment best practices
-✔ Automating validation with Kyverno
-
----
-
+- [Kyverno Documentation](https://kyverno.io/docs/)
+- [Kubernetes Admission Controllers](https://kubernetes.io/docs/reference/access-authn-authz/admission-controllers/)
+- [Helm Charts — Kyverno](https://artifacthub.io/packages/helm/kyverno/kyverno)

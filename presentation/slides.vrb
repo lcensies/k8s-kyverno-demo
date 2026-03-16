@@ -1,0 +1,49 @@
+\frametitle{Results — Non-Compliant Workload \& Rejection}
+\begin{columns}[T]
+    \column{0.46\textwidth}
+\begin{lstlisting}[title=test/deployment.yaml (non-compliant)]
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest  # VIOLATION
+        # No resource limits  # VIOLATION
+        # No securityContext  # VIOLATION
+\end{lstlisting}
+    \column{0.52\textwidth}
+      \textbf{Admission controller output:}
+\begin{lstlisting}[style=terminal]
+$ kubectl apply -f test/deployment.yaml
+
+Error from server:
+admission webhook
+"validate.kyverno.svc-fail" denied
+the request:
+
+resource Deployment/default/nginx-test
+was blocked due to the following
+policies:
+
+disallow-latest-tag:
+  check-image-tag: latest tag is
+  not allowed
+
+require-resources:
+  check-resources: CPU and memory
+  limits are required
+\end{lstlisting}
+      \vspace{2pt}
+      \small{The request never reaches \texttt{etcd} — zero runtime exposure.}
+  \end{columns}
